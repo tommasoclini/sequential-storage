@@ -10,8 +10,8 @@ use self::{
     key_pointers::{
         CachedKeyPointers, HeapCachedKeyPointers, KeyPointersCache, UncachedKeyPointers,
     },
-    page_pointers::{CachedPagePointers, UncachedPagePointers},
-    page_states::{CachedPageStates, UncachedPageStates},
+    page_pointers::{CachedPagePointers, HeapCachedPagePointers, UncachedPagePointers},
+    page_states::{CachedPageStates, HeapCachedPageStates, UncachedPageStates},
 };
 
 pub(crate) mod key_pointers;
@@ -435,10 +435,10 @@ pub struct KeyPointerCache<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize>
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 #[cfg(feature = "alloc")]
-pub struct HeapKeyPointerCache<const PAGE_COUNT: usize, KEY: Key> {
+pub struct HeapKeyPointerCache<KEY: Key> {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates<PAGE_COUNT>,
-    page_pointers: CachedPagePointers<PAGE_COUNT>,
+    page_states: HeapCachedPageStates,
+    page_pointers: HeapCachedPagePointers,
     key_pointers: HeapCachedKeyPointers<KEY>,
 }
 
@@ -455,13 +455,13 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_
 }
 
 #[cfg(feature = "alloc")]
-impl<const PAGE_COUNT: usize, KEY: Key> HeapKeyPointerCache<PAGE_COUNT, KEY> {
+impl<KEY: Key> HeapKeyPointerCache<KEY> {
     /// Construct a new instance
-    pub fn new(keys: usize) -> Self {
+    pub fn new(page_count: usize, keys: usize) -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(),
-            page_pointers: CachedPagePointers::new(),
+            page_states: HeapCachedPageStates::new(page_count),
+            page_pointers: HeapCachedPagePointers::new(page_count),
             key_pointers: HeapCachedKeyPointers::new(keys),
         }
     }
@@ -495,9 +495,9 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> PrivateCacheImpl
 }
 
 #[cfg(feature = "alloc")]
-impl<const PAGE_COUNT: usize, KEY: Key> PrivateCacheImpl for HeapKeyPointerCache<PAGE_COUNT, KEY> {
-    type PSC = CachedPageStates<PAGE_COUNT>;
-    type PPC = CachedPagePointers<PAGE_COUNT>;
+impl<KEY: Key> PrivateCacheImpl for HeapKeyPointerCache<KEY> {
+    type PSC = HeapCachedPageStates;
+    type PPC = HeapCachedPagePointers;
 
     fn dirt_tracker<R>(&mut self, f: impl FnOnce(&mut DirtTracker) -> R) -> Option<R> {
         Some(f(&mut self.dirt_tracker))
@@ -522,9 +522,9 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyCacheImpl<KEY>
 }
 
 #[cfg(feature = "alloc")]
-impl<const PAGE_COUNT: usize, KEY: Key> CacheImpl for HeapKeyPointerCache<PAGE_COUNT, KEY> {}
+impl<KEY: Key> CacheImpl for HeapKeyPointerCache<KEY> {}
 #[cfg(feature = "alloc")]
-impl<const PAGE_COUNT: usize, KEY: Key> KeyCacheImpl<KEY> for HeapKeyPointerCache<PAGE_COUNT, KEY> {}
+impl<KEY: Key> KeyCacheImpl<KEY> for HeapKeyPointerCache<KEY> {}
 
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> Invalidate
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
@@ -538,7 +538,7 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> Invalidate
 }
 
 #[cfg(feature = "alloc")]
-impl<const PAGE_COUNT: usize, KEY: Key> Invalidate for HeapKeyPointerCache<PAGE_COUNT, KEY> {
+impl<KEY: Key> Invalidate for HeapKeyPointerCache<KEY> {
     fn invalidate_cache_state(&mut self) {
         self.dirt_tracker.unmark_dirty();
         self.page_states.invalidate_cache_state();
@@ -558,9 +558,7 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> PrivateKeyCacheImpl<K
 }
 
 #[cfg(feature = "alloc")]
-impl<const PAGE_COUNT: usize, KEY: Key> PrivateKeyCacheImpl<KEY>
-    for HeapKeyPointerCache<PAGE_COUNT, KEY>
-{
+impl<KEY: Key> PrivateKeyCacheImpl<KEY> for HeapKeyPointerCache<KEY> {
     type KPC = HeapCachedKeyPointers<KEY>;
 
     fn key_pointers(&mut self) -> &mut Self::KPC {

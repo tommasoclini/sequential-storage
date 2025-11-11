@@ -36,6 +36,8 @@ heapless = ["dep:heapless"]
 heapless-09 = ["dep:heapless-09"]
 _test = ["dep:futures", "dep:approx", "std", "arrayvec", "alloc", "heapless"]
 
+default = ["alloc"]
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing_repro)'] }
 

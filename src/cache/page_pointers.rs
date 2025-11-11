@@ -1,5 +1,8 @@
 use core::{fmt::Debug, num::NonZeroU32, ops::Range};
 
+#[cfg(feature = "alloc")]
+use alloc::{vec, vec::Vec};
+
 use embedded_storage_async::nor_flash::NorFlash;
 
 use crate::{
@@ -35,7 +38,49 @@ pub(crate) struct CachedPagePointers<const PAGE_COUNT: usize> {
     after_written_pointers: [Option<NonZeroU32>; PAGE_COUNT],
 }
 
+// Use NoneZeroU32 because we never store 0's in here (because of the first page marker)
+// and so Option can make use of the niche so we save bytes
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg(feature = "alloc")]
+pub(crate) struct HeapCachedPagePointers {
+    after_erased_pointers: Vec<Option<NonZeroU32>>,
+    after_written_pointers: Vec<Option<NonZeroU32>>,
+}
+
 impl<const PAGE_COUNT: usize> Debug for CachedPagePointers<PAGE_COUNT> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{{ after_erased_pointers: [")?;
+        for (i, val) in self.after_erased_pointers.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+
+            if let Some(val) = val {
+                write!(f, "{:?}", val.get())?;
+            } else {
+                write!(f, "?")?;
+            }
+        }
+        write!(f, "], after_written_pointers: [")?;
+        for (i, val) in self.after_written_pointers.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+
+            if let Some(val) = val {
+                write!(f, "{:?}", val.get())?;
+            } else {
+                write!(f, "?")?;
+            }
+        }
+        write!(f, "] }}")?;
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl Debug for HeapCachedPagePointers {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{{ after_erased_pointers: [")?;
         for (i, val) in self.after_erased_pointers.iter().enumerate() {
@@ -72,6 +117,16 @@ impl<const PAGE_COUNT: usize> CachedPagePointers<PAGE_COUNT> {
         Self {
             after_erased_pointers: [None; PAGE_COUNT],
             after_written_pointers: [None; PAGE_COUNT],
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl HeapCachedPagePointers {
+    pub fn new(page_count: usize) -> Self {
+        Self {
+            after_erased_pointers: vec![None; page_count],
+            after_written_pointers: vec![None; page_count],
         }
     }
 }
@@ -135,6 +190,69 @@ impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUN
     fn invalidate_cache_state(&mut self) {
         self.after_erased_pointers = [None; PAGE_COUNT];
         self.after_written_pointers = [None; PAGE_COUNT];
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl PagePointersCache for HeapCachedPagePointers {
+    fn first_item_after_erased(&self, page_index: usize) -> Option<u32> {
+        self.after_erased_pointers[page_index].map(|val| val.get())
+    }
+
+    fn first_item_after_written(&self, page_index: usize) -> Option<u32> {
+        self.after_written_pointers[page_index].map(|val| val.get())
+    }
+
+    fn notice_item_written<S: NorFlash>(
+        &mut self,
+        flash_range: Range<u32>,
+        item_address: u32,
+        item_header: &ItemHeader,
+    ) {
+        let page_index = calculate_page_index::<S>(flash_range, item_address);
+
+        let next_item_address = item_header.next_item_address::<S>(item_address);
+
+        // We only care about the furthest written item, so discard if this is an earlier item
+        if let Some(first_item_after_written) = self.first_item_after_written(page_index) {
+            if next_item_address <= first_item_after_written {
+                return;
+            }
+        }
+
+        self.after_written_pointers[page_index] = NonZeroU32::new(next_item_address);
+    }
+
+    fn notice_item_erased<S: NorFlash>(
+        &mut self,
+        flash_range: Range<u32>,
+        item_address: u32,
+        item_header: &ItemHeader,
+    ) {
+        let page_index = calculate_page_index::<S>(flash_range.clone(), item_address);
+
+        // Either the item we point to or the first item on the page
+        let next_unerased_item = self.first_item_after_erased(page_index).unwrap_or_else(|| {
+            calculate_page_address::<S>(flash_range, page_index) + S::WORD_SIZE as u32
+        });
+
+        if item_address == next_unerased_item {
+            self.after_erased_pointers[page_index] =
+                NonZeroU32::new(item_header.next_item_address::<S>(item_address));
+        }
+    }
+
+    fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
+        if new_state.is_open() {
+            // This page was erased
+            self.after_erased_pointers[page_index] = None;
+            self.after_written_pointers[page_index] = None;
+        }
+    }
+
+    fn invalidate_cache_state(&mut self) {
+        self.after_erased_pointers = vec![None; self.after_erased_pointers.len()];
+        self.after_written_pointers = vec![None; self.after_written_pointers.len()];
     }
 }
 

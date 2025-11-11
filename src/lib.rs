@@ -17,6 +17,8 @@ use map::SerializationError;
 
 #[cfg(feature = "alloc")]
 mod alloc_impl;
+#[cfg(feature = "alloc")]
+extern crate alloc;
 #[cfg(feature = "arrayvec")]
 mod arrayvec_impl;
 pub mod cache;

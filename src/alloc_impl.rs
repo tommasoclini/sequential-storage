@@ -1,4 +1,3 @@
-extern crate alloc;
 use crate::map::{Key, SerializationError, Value};
 use alloc::{string::String, vec::Vec};
 

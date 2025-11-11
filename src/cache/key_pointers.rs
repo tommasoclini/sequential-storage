@@ -3,9 +3,6 @@ use core::{fmt::Debug, num::NonZeroU32};
 use crate::map::Key;
 
 #[cfg(feature = "alloc")]
-extern crate alloc;
-
-#[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
 pub(crate) trait KeyPointersCache<KEY: Key> {
@@ -28,7 +25,6 @@ pub(crate) struct CachedKeyPointers<KEY: Eq, const KEYS: usize> {
 #[cfg(feature = "alloc")]
 pub(crate) struct HeapCachedKeyPointers<KEY: Eq> {
     key_pointers: Vec<Option<(KEY, NonZeroU32)>>,
-    keys: usize,
 }
 
 impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
@@ -68,7 +64,6 @@ impl<KEY: Eq> HeapCachedKeyPointers<KEY> {
                 v.resize_with(keys, || Self::ARRAY_REPEAT_VALUE);
                 v
             },
-            keys,
         }
     }
 
@@ -85,8 +80,9 @@ impl<KEY: Eq> HeapCachedKeyPointers<KEY> {
     }
 
     fn insert_front(&mut self, value: (KEY, NonZeroU32)) {
-        self.key_pointers[self.keys - 1] = Some(value);
-        move_to_front(&mut self.key_pointers, self.keys - 1);
+        let len = self.key_pointers.len();
+        self.key_pointers[len - 1] = Some(value);
+        move_to_front(&mut self.key_pointers, len - 1);
     }
 }
 
@@ -144,7 +140,7 @@ impl<KEY: Key> KeyPointersCache<KEY> for HeapCachedKeyPointers<KEY> {
     }
 
     fn invalidate_cache_state(&mut self) {
-        *self = Self::new(self.keys);
+        *self = Self::new(self.key_pointers.len());
     }
 }
 
