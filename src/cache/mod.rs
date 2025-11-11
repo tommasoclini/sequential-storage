@@ -7,7 +7,9 @@ use embedded_storage_async::nor_flash::NorFlash;
 use crate::{PageState, item::ItemHeader, map::Key};
 
 use self::{
-    key_pointers::{CachedKeyPointers, KeyPointersCache, UncachedKeyPointers},
+    key_pointers::{
+        CachedKeyPointers, HeapCachedKeyPointers, KeyPointersCache, UncachedKeyPointers,
+    },
     page_pointers::{CachedPagePointers, UncachedPagePointers},
     page_states::{CachedPageStates, UncachedPageStates},
 };
@@ -429,6 +431,17 @@ pub struct KeyPointerCache<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize>
     key_pointers: CachedKeyPointers<KEY, KEYS>,
 }
 
+///
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg(feature = "alloc")]
+pub struct HeapKeyPointerCache<const PAGE_COUNT: usize, KEY: Key> {
+    dirt_tracker: DirtTracker,
+    page_states: CachedPageStates<PAGE_COUNT>,
+    page_pointers: CachedPagePointers<PAGE_COUNT>,
+    key_pointers: HeapCachedKeyPointers<KEY>,
+}
+
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_COUNT, KEY, KEYS> {
     /// Construct a new instance
     pub const fn new() -> Self {
@@ -437,6 +450,19 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_
             page_states: CachedPageStates::new(),
             page_pointers: CachedPagePointers::new(),
             key_pointers: CachedKeyPointers::new(),
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<const PAGE_COUNT: usize, KEY: Key> HeapKeyPointerCache<PAGE_COUNT, KEY> {
+    /// Construct a new instance
+    pub fn new(keys: usize) -> Self {
+        Self {
+            dirt_tracker: DirtTracker::new(),
+            page_states: CachedPageStates::new(),
+            page_pointers: CachedPagePointers::new(),
+            key_pointers: HeapCachedKeyPointers::new(keys),
         }
     }
 }
@@ -468,6 +494,24 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> PrivateCacheImpl
     }
 }
 
+#[cfg(feature = "alloc")]
+impl<const PAGE_COUNT: usize, KEY: Key> PrivateCacheImpl for HeapKeyPointerCache<PAGE_COUNT, KEY> {
+    type PSC = CachedPageStates<PAGE_COUNT>;
+    type PPC = CachedPagePointers<PAGE_COUNT>;
+
+    fn dirt_tracker<R>(&mut self, f: impl FnOnce(&mut DirtTracker) -> R) -> Option<R> {
+        Some(f(&mut self.dirt_tracker))
+    }
+
+    fn page_states(&mut self) -> &mut Self::PSC {
+        &mut self.page_states
+    }
+
+    fn page_pointers(&mut self) -> &mut Self::PPC {
+        &mut self.page_pointers
+    }
+}
+
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> CacheImpl
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
@@ -476,6 +520,11 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyCacheImpl<KEY>
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
 }
+
+#[cfg(feature = "alloc")]
+impl<const PAGE_COUNT: usize, KEY: Key> CacheImpl for HeapKeyPointerCache<PAGE_COUNT, KEY> {}
+#[cfg(feature = "alloc")]
+impl<const PAGE_COUNT: usize, KEY: Key> KeyCacheImpl<KEY> for HeapKeyPointerCache<PAGE_COUNT, KEY> {}
 
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> Invalidate
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
@@ -488,10 +537,31 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> Invalidate
     }
 }
 
+#[cfg(feature = "alloc")]
+impl<const PAGE_COUNT: usize, KEY: Key> Invalidate for HeapKeyPointerCache<PAGE_COUNT, KEY> {
+    fn invalidate_cache_state(&mut self) {
+        self.dirt_tracker.unmark_dirty();
+        self.page_states.invalidate_cache_state();
+        self.page_pointers.invalidate_cache_state();
+        self.key_pointers.invalidate_cache_state();
+    }
+}
+
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> PrivateKeyCacheImpl<KEY>
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
     type KPC = CachedKeyPointers<KEY, KEYS>;
+
+    fn key_pointers(&mut self) -> &mut Self::KPC {
+        &mut self.key_pointers
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<const PAGE_COUNT: usize, KEY: Key> PrivateKeyCacheImpl<KEY>
+    for HeapKeyPointerCache<PAGE_COUNT, KEY>
+{
+    type KPC = HeapCachedKeyPointers<KEY>;
 
     fn key_pointers(&mut self) -> &mut Self::KPC {
         &mut self.key_pointers

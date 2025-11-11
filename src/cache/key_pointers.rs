@@ -2,6 +2,12 @@ use core::{fmt::Debug, num::NonZeroU32};
 
 use crate::map::Key;
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
 pub(crate) trait KeyPointersCache<KEY: Key> {
     fn key_location(&self, key: &KEY) -> Option<u32>;
 
@@ -15,6 +21,14 @@ pub(crate) trait KeyPointersCache<KEY: Key> {
 #[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub(crate) struct CachedKeyPointers<KEY: Eq, const KEYS: usize> {
     key_pointers: [Option<(KEY, NonZeroU32)>; KEYS],
+}
+
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg(feature = "alloc")]
+pub(crate) struct HeapCachedKeyPointers<KEY: Eq> {
+    key_pointers: Vec<Option<(KEY, NonZeroU32)>>,
+    keys: usize,
 }
 
 impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
@@ -44,6 +58,38 @@ impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
     }
 }
 
+impl<KEY: Eq> HeapCachedKeyPointers<KEY> {
+    const ARRAY_REPEAT_VALUE: Option<(KEY, NonZeroU32)> = None;
+
+    pub(crate) fn new(keys: usize) -> Self {
+        Self {
+            key_pointers: {
+                let mut v = Vec::new();
+                v.resize_with(keys, || Self::ARRAY_REPEAT_VALUE);
+                v
+            },
+            keys,
+        }
+    }
+
+    fn key_index(&self, key: &KEY) -> Option<usize> {
+        self.key_pointers
+            .iter()
+            .enumerate()
+            .filter_map(|(index, val)| val.as_ref().map(|val| (index, val)))
+            .find_map(
+                |(index, (known_key, _))| {
+                    if key == known_key { Some(index) } else { None }
+                },
+            )
+    }
+
+    fn insert_front(&mut self, value: (KEY, NonZeroU32)) {
+        self.key_pointers[self.keys - 1] = Some(value);
+        move_to_front(&mut self.key_pointers, self.keys - 1);
+    }
+}
+
 impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KEY, KEYS> {
     fn key_location(&self, key: &KEY) -> Option<u32> {
         self.key_index(key)
@@ -70,6 +116,35 @@ impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KE
 
     fn invalidate_cache_state(&mut self) {
         *self = Self::new();
+    }
+}
+
+impl<KEY: Key> KeyPointersCache<KEY> for HeapCachedKeyPointers<KEY> {
+    fn key_location(&self, key: &KEY) -> Option<u32> {
+        self.key_index(key)
+            .map(|index| self.key_pointers[index].as_ref().unwrap().1.get())
+    }
+
+    fn notice_key_location(&mut self, key: &KEY, item_address: u32) {
+        match self.key_index(key) {
+            Some(existing_index) => {
+                self.key_pointers[existing_index] =
+                    Some((key.clone(), NonZeroU32::new(item_address).unwrap()));
+                move_to_front(&mut self.key_pointers, existing_index);
+            }
+            None => self.insert_front((key.clone(), NonZeroU32::new(item_address).unwrap())),
+        }
+    }
+
+    fn notice_key_erased(&mut self, key: &KEY) {
+        if let Some(existing_index) = self.key_index(key) {
+            self.key_pointers[existing_index] = None;
+            move_to_back(&mut self.key_pointers, existing_index);
+        }
+    }
+
+    fn invalidate_cache_state(&mut self) {
+        *self = Self::new(self.keys);
     }
 }
 
